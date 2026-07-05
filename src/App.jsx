@@ -1,5 +1,6 @@
 import { storage } from "./lib/storage";
 import { isConfigured as onenoteConfigured, getAccessToken, fetchOneNoteData } from "./lib/onenote";
+import { importLocalFiles } from "./lib/localImport";
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   BookOpen, ChevronRight, ChevronDown, Search, RefreshCw, Volume2, VolumeX,
@@ -841,6 +842,19 @@ Only include "related" entries whose id actually appears in the list above. Keep
     }
   }
 
+  async function runLocalSync(fileList) {
+    setSyncError(null);
+    setSyncStep("connecting");
+    try {
+      const data = await importLocalFiles(fileList);
+      setDiscovered(data);
+      setSyncStep("found");
+    } catch (err) {
+      setSyncError(err.message || "Couldn't read those files.");
+      setSyncStep("error");
+    }
+  }
+
   function importFromOneNote() {
     if (!discovered.length) return;
     setSyncStep("importing");
@@ -1153,6 +1167,7 @@ Only include "related" entries whose id actually appears in the list above. Keep
           error={syncError}
           counts={syncCounts}
           onConnect={runSync}
+          onLocalFiles={runLocalSync}
           onImport={importFromOneNote}
           onClose={closeSync}
         />
@@ -1913,7 +1928,8 @@ function SermonInsightsDrawer({ page, status, data, onOpenPage, onRetry, onClose
 /* ---------------------------------------------------------------------- */
 /* Sync modal                                                              */
 /* ---------------------------------------------------------------------- */
-function SyncModal({ step, configured, discovered = [], error, counts, onConnect, onImport, onClose }) {
+function SyncModal({ step, configured, discovered = [], error, counts, onConnect, onLocalFiles, onImport, onClose }) {
+  const fileRef = useRef(null);
   const totalSections = discovered.reduce((s, nb) => s + nb.sections.length, 0);
   const totalPages = discovered.reduce(
     (s, nb) => s + nb.sections.reduce((p, sec) => p + sec.pages.length, 0),
@@ -1943,40 +1959,62 @@ function SyncModal({ step, configured, discovered = [], error, counts, onConnect
         <div className="px-6 py-6">
           {step === "intro" && (
             <>
-              <p style={{ color: C.inkSoft, fontSize: 14, lineHeight: 1.6 }}>
-                Marginalia connects to your real OneNote account through Microsoft Graph and pulls
-                your notebooks, sections, and pages in — formatting preserved.
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".json,.one"
+                multiple
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  if (e.target.files && e.target.files.length) onLocalFiles(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+
+              {/* Option 1: sync from this computer (no Azure needed) */}
+              <p style={{ color: C.ink, fontSize: 13.5, fontWeight: 600, marginBottom: 4 }}>
+                Sync from this computer
               </p>
+              <p style={{ color: C.inkSoft, fontSize: 13, lineHeight: 1.55 }}>
+                Import straight from OneNote on this machine — no Microsoft sign-in needed. Pick a
+                <code> marginalia-onenote.json</code> export, or your OneNote <code>.one</code> section files.
+              </p>
+              <button
+                onClick={() => fileRef.current && fileRef.current.click()}
+                className="w-full flex items-center justify-center gap-2 mt-4 py-2.5 rounded-md text-sm font-medium"
+                style={{ background: C.ink, color: C.paper, border: "none" }}
+              >
+                <Link2 size={14} /> Choose files from this computer
+              </button>
+              <p className="text-xs mt-3" style={{ color: C.inkSoft, opacity: 0.8, lineHeight: 1.5 }}>
+                Tip: run <code>npm run onenote:local</code> to auto-generate the JSON export from your
+                installed OneNote, then choose it here.
+              </p>
+
+              {/* Option 2: cloud sign-in via Microsoft Graph */}
+              <div className="flex items-center gap-3 my-5">
+                <span style={{ flex: 1, height: 1, background: C.line }} />
+                <span style={{ fontSize: 11, color: C.inkSoft, letterSpacing: "0.05em" }}>OR</span>
+                <span style={{ flex: 1, height: 1, background: C.line }} />
+              </div>
+
               {configured ? (
-                <>
-                  <button
-                    onClick={onConnect}
-                    className="w-full flex items-center justify-center gap-2 mt-5 py-2.5 rounded-md text-sm font-medium"
-                    style={{ background: C.ink, color: C.paper, border: "none" }}
-                  >
-                    <Link2 size={14} /> Connect Microsoft account
-                  </button>
-                  <p className="text-xs mt-4" style={{ color: C.inkSoft, opacity: 0.75, lineHeight: 1.5 }}>
-                    You'll sign in with Microsoft in a popup. Marginalia only requests read access
-                    to your notes (Notes.Read).
-                  </p>
-                </>
-              ) : (
-                <div
-                  className="mt-5 p-3 rounded-lg"
-                  style={{ border: `1px solid ${C.line}`, background: C.paper }}
+                <button
+                  onClick={onConnect}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-md text-sm font-medium"
+                  style={{ background: C.cream, color: C.ink, border: `1px solid ${C.line}` }}
                 >
-                  <p style={{ fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 4 }}>
-                    OneNote sync isn't configured yet
-                  </p>
-                  <p style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.5 }}>
-                    Add your Azure app's client ID as <code>VITE_MS_CLIENT_ID</code> in the project's
-                    environment variables, then redeploy to enable real sign-in.
-                  </p>
-                </div>
+                  <Link2 size={14} /> Sign in with Microsoft
+                </button>
+              ) : (
+                <p style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.5 }}>
+                  Cloud sign-in (Microsoft Graph) isn't configured. Add an Azure app client ID as{" "}
+                  <code>VITE_MS_CLIENT_ID</code> to enable it — or just use local sync above.
+                </p>
               )}
             </>
           )}
+
 
           {step === "connecting" && (
             <div className="flex flex-col items-center gap-3 py-6">

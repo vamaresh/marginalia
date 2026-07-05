@@ -3,3 +3,6 @@ dist
 .vercel
 .env
 .env.local
+
+# Local OneNote export (personal data)
+marginalia-onenote.json
