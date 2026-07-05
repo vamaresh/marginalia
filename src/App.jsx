@@ -1,13 +1,14 @@
 import { storage } from "./lib/storage";
 import { isConfigured as onenoteConfigured, getAccessToken, fetchOneNoteData } from "./lib/onenote";
 import { importLocalFiles } from "./lib/localImport";
-import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback, useLayoutEffect } from "react";
 import {
   BookOpen, ChevronRight, ChevronDown, Search, RefreshCw, Volume2, VolumeX,
   Settings2, X, Play, Pause, Sun, Moon, Coffee, Type, Check, Loader2,
   Headphones, ArrowLeft, Sparkles, Link2, CheckCircle2, Square, Clock,
   PanelLeftClose, PanelLeft, Quote, AlertTriangle, Pencil, Palette,
-  Bold, Italic, Underline, Highlighter, Plus, Trash2, FilePlus, FolderPlus, Pencil as PencilIcon
+  Bold, Italic, Underline, Highlighter, Plus, Trash2, FilePlus, FolderPlus, Pencil as PencilIcon,
+  List, ListOrdered, Strikethrough, Heading1, Heading2, Eraser, ChevronLeft, Minus, Link, Quote as QuoteIcon
 } from "lucide-react";
 
 /* ---------------------------------------------------------------------- */
@@ -46,6 +47,14 @@ const BG_SWATCHES = [
   { v: "#FDECEA" },
   { v: "#EAF2F8" },
 ];
+
+// Reader column widths (max content width in px; "full" = fill available space).
+const READER_WIDTHS = {
+  narrow: 560,
+  medium: 680,
+  wide: 900,
+  full: null,
+};
 
 /* ---------------------------------------------------------------------- */
 /* Sample library — stands in for imported OneNote content                 */
@@ -402,6 +411,10 @@ export default function App() {
     fontFamily: "serif",
     fontSize: 19,
     lineHeight: 1.75,
+    readerWidth: "medium",
+    paged: false,
+    voiceURI: null,
+    rate: 0.98,
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsLoaded = useRef(false);
@@ -422,6 +435,7 @@ export default function App() {
   const podcastCache = useRef({});
   const stopFlag = useRef(false);
   const voicesRef = useRef([]);
+  const [voices, setVoices] = useState([]);
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
@@ -435,7 +449,7 @@ export default function App() {
     (async () => {
       try {
         const res = await storage.get("marginalia-settings");
-        if (res && res.value) setSettings(JSON.parse(res.value));
+        if (res && res.value) setSettings((d) => ({ ...d, ...JSON.parse(res.value) }));
       } catch (e) {
         /* no saved settings yet */
       }
@@ -472,7 +486,7 @@ export default function App() {
                 ...sec,
                 pages: sec.pages.map((pg) =>
                   entries[pg.id]
-                    ? { ...pg, html: entries[pg.id].html || pg.html, bgColor: entries[pg.id].bgColor || pg.bgColor }
+                    ? { ...pg, html: entries[pg.id].html || pg.html, bgColor: entries[pg.id].bgColor || pg.bgColor, title: entries[pg.id].title || pg.title }
                     : pg
                 ),
               })),
@@ -497,7 +511,7 @@ export default function App() {
       const updated = next.flatMap((nb) => nb.sections).flatMap((s) => s.pages).find((p) => p.id === pageId);
       if (updated) {
         storage
-          .set(`note:${pageId}`, JSON.stringify({ html: updated.html || null, bgColor: updated.bgColor || null }))
+          .set(`note:${pageId}`, JSON.stringify({ html: updated.html || null, bgColor: updated.bgColor || null, title: updated.title || null }))
           .catch(() => {});
       }
       return next;
@@ -643,7 +657,9 @@ export default function App() {
 
   useEffect(() => {
     function loadVoices() {
-      voicesRef.current = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+      const list = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+      voicesRef.current = list;
+      setVoices(list);
     }
     loadVoices();
     if (window.speechSynthesis) {
@@ -654,10 +670,50 @@ export default function App() {
     };
   }, []);
 
+  // Rank voices so the nicest-sounding English voice is the default.
+  function rankedVoices() {
+    const all = voicesRef.current || [];
+    const en = all.filter((v) => /^en\b|^en[-_]/i.test(v.lang));
+    const pool = en.length ? en : all;
+    const PREF = [
+      "natural", "aria", "jenny", "guy", "libby", "sonia", "ryan", // MS neural
+      "samantha", "serena", "karen", "moira", "daniel", "tessa", "fiona", // Apple
+      "google us english", "google uk english female", "google uk english male", "google",
+      "siri",
+    ];
+    const BAD = /compact|eloquence|fred|albert|zarvox|junior|ralph|kathy|bahh|bells|boing|bubbles|cellos|deranged|hysterical|pipe|trinoids|whisper|wobble|superstar|organ|good news|bad news/i;
+    const score = (v) => {
+      const n = v.name.toLowerCase();
+      let s = 0;
+      const idx = PREF.findIndex((p) => n.includes(p));
+      if (idx >= 0) s += 100 - idx;
+      if (/natural|neural|premium|enhanced|siri/i.test(n)) s += 40;
+      if (v.localService) s += 8;
+      if (BAD.test(n)) s -= 100;
+      if (/female/i.test(n)) s += 2;
+      return s;
+    };
+    return [...pool].sort((a, b) => score(b) - score(a));
+  }
+
+  function selectedVoice() {
+    const all = voicesRef.current || [];
+    if (settings.voiceURI) {
+      const found = all.find((v) => v.voiceURI === settings.voiceURI);
+      if (found) return found;
+    }
+    return rankedVoices()[0] || all[0] || null;
+  }
+
+  // For the two-speaker podcast: primary = chosen/best, secondary = a
+  // distinct good voice so the two hosts sound different.
   function pickVoice(preferIdx) {
-    const voices = voicesRef.current || [];
-    if (!voices.length) return null;
-    return voices[preferIdx % voices.length];
+    const ranked = rankedVoices();
+    if (!ranked.length) return null;
+    if (preferIdx === 0) return selectedVoice() || ranked[0];
+    const primary = selectedVoice() || ranked[0];
+    const other = ranked.find((v) => v.voiceURI !== (primary && primary.voiceURI));
+    return other || ranked[preferIdx % ranked.length];
   }
 
   /* -------------------- derived -------------------- */
@@ -738,9 +794,9 @@ export default function App() {
       return;
     }
     const utter = new SpeechSynthesisUtterance(sentences[i].text);
-    const v = pickVoice(0);
+    const v = selectedVoice();
     if (v) utter.voice = v;
-    utter.rate = 0.98;
+    utter.rate = settings.rate || 1;
     utter.onend = () => {
       if (!stopFlag.current) speakSentence(i + 1);
     };
@@ -1309,7 +1365,9 @@ Only include "related" entries whose id actually appears in the list above. Keep
             sidebarOpen={sidebarOpen}
             collapseSidebar={() => sidebarOpen && setSidebarOpen(false)}
             onSaveHtml={(html) => applyPageUpdate(current.page.id, { html })}
+            onSaveTitle={(title) => applyPageUpdate(current.page.id, { title })}
             onSetBg={(color) => applyPageUpdate(current.page.id, { bgColor: color })}
+            voices={voices}
           />
         )}
       </main>
@@ -1437,21 +1495,165 @@ function HomeView({ notebooks, recentPages, totalPages, onOpen, onSync }) {
 }
 
 /* ---------------------------------------------------------------------- */
+/* Paged reader — Kindle-style column pagination for any HTML content       */
+/* ---------------------------------------------------------------------- */
+function PagedReader({ bg, maxWidth, settings, readerText, children, onEdge }) {
+  const viewportRef = useRef(null);
+  const colsRef = useRef(null);
+  const stepRef = useRef(1);
+  const [pageIdx, setPageIdx] = useState(0);
+  const [pageCount, setPageCount] = useState(1);
+  const GAP = 64;
+
+  const measure = useCallback(() => {
+    const vp = viewportRef.current, cols = colsRef.current;
+    if (!vp || !cols) return;
+    const cs = window.getComputedStyle(vp);
+    const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+    const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    const w = Math.max(50, vp.clientWidth - padX);
+    const h = Math.max(50, vp.clientHeight - padY);
+    cols.style.height = h + "px";
+    cols.style.columnWidth = w + "px";
+    cols.style.columnGap = GAP + "px";
+    stepRef.current = w + GAP;
+    const total = Math.max(1, Math.round((cols.scrollWidth + GAP) / (w + GAP)));
+    setPageCount(total);
+    setPageIdx((p) => Math.min(p, total - 1));
+  }, []);
+
+  useLayoutEffect(() => {
+    measure();
+  }, [measure, children, settings.fontSize, settings.lineHeight, settings.readerWidth, settings.fontFamily]);
+
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+    const ro = new ResizeObserver(() => measure());
+    ro.observe(vp);
+    return () => ro.disconnect();
+  }, [measure]);
+
+  useEffect(() => {
+    if (colsRef.current) {
+      colsRef.current.style.transform = `translateX(-${pageIdx * stepRef.current}px)`;
+    }
+  }, [pageIdx, pageCount]);
+
+  const go = useCallback(
+    (dir) => setPageIdx((p) => Math.max(0, Math.min(pageCount - 1, p + dir))),
+    [pageCount]
+  );
+
+  useEffect(() => {
+    function onKey(e) {
+      if (e.target && /^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
+      if (e.key === "ArrowRight" || e.key === "PageDown") { e.preventDefault(); go(1); }
+      else if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); go(-1); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [go]);
+
+  function handleTap(e) {
+    if (e.target.closest("a")) return;
+    if (window.getSelection && String(window.getSelection())) return; // don't flip mid-selection
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    if (x < rect.width * 0.28) go(-1);
+    else if (x > rect.width * 0.72) go(1);
+    else if (onEdge) onEdge();
+  }
+
+  const btn = (enabled) => ({
+    background: C.cream,
+    border: `1px solid ${C.line}`,
+    color: enabled ? C.ink : C.line,
+    cursor: enabled ? "pointer" : "default",
+    opacity: enabled ? 1 : 0.5,
+  });
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden" style={{ background: bg }}>
+      <div
+        ref={viewportRef}
+        className="flex-1 overflow-hidden"
+        onClick={handleTap}
+        style={{
+          margin: "0 auto",
+          padding: "48px 44px 8px",
+          width: "100%",
+          maxWidth: maxWidth ? maxWidth + 88 : "none",
+          position: "relative",
+          cursor: "default",
+        }}
+      >
+        <div
+          ref={colsRef}
+          style={{
+            columnFill: "auto",
+            height: "100%",
+            transition: "transform 0.35s cubic-bezier(.22,.61,.36,1)",
+            willChange: "transform",
+          }}
+        >
+          {children}
+        </div>
+      </div>
+      <div
+        className="flex items-center justify-center gap-5 py-2.5 flex-shrink-0"
+        style={{ background: C.paper, borderTop: `1px solid ${C.line}` }}
+      >
+        <button
+          onClick={() => go(-1)}
+          disabled={pageIdx <= 0}
+          className="w-8 h-8 rounded-md flex items-center justify-center"
+          style={btn(pageIdx > 0)}
+        >
+          <ChevronLeft size={16} />
+        </button>
+        <span className="text-xs font-medium" style={{ color: C.inkSoft, minWidth: 90, textAlign: "center" }}>
+          Page {pageIdx + 1} of {pageCount}
+        </span>
+        <button
+          onClick={() => go(1)}
+          disabled={pageIdx >= pageCount - 1}
+          className="w-8 h-8 rounded-md flex items-center justify-center"
+          style={btn(pageIdx < pageCount - 1)}
+        >
+          <ChevronRight size={16} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
 /* Reader view                                                             */
 /* ---------------------------------------------------------------------- */
 function ReaderView({
   current, settings, setSettings, settingsOpen, setSettingsOpen,
   readerBg, readerText, fontFamily, sentences, reading, toggleReadAloud,
   progressPct, onBack, onPodcast, isSermon, onSermonInsights, collapseSidebar,
-  onSaveHtml, onSetBg,
+  onSaveHtml, onSaveTitle, onSetBg, voices,
 }) {
   const { notebook, section, page } = current;
   const [editMode, setEditMode] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(page.title);
   const editorRef = useRef(null);
   const savedRange = useRef(null);
 
   const pageHtml = page.html || paragraphsToHtml(page.content);
   const effectiveBg = page.bgColor || readerBg;
+  const maxWidth = READER_WIDTHS[settings.readerWidth] || READER_WIDTHS.medium;
+
+  useEffect(() => {
+    setTitleDraft(page.title);
+  }, [page.id, page.title]);
 
   useEffect(() => {
     if (editMode && editorRef.current) {
@@ -1478,6 +1680,10 @@ function ReaderView({
     document.execCommand(cmd, false, value);
     if (editorRef.current) editorRef.current.focus();
   }
+  function insertLink() {
+    const url = window.prompt("Link URL:", "https://");
+    if (url) exec("createLink", url);
+  }
   function applyHighlight(color) {
     restoreSelection();
     let ok = false;
@@ -1501,7 +1707,12 @@ function ReaderView({
   }
   function saveNow() {
     if (editorRef.current) onSaveHtml(editorRef.current.innerHTML);
+    commitTitle();
     setEditMode(false);
+  }
+  function commitTitle() {
+    const t = (titleDraft || "").trim() || "Untitled";
+    if (t !== page.title) onSaveTitle(t);
   }
   function handleBlur() {
     if (editorRef.current) onSaveHtml(editorRef.current.innerHTML);
@@ -1628,14 +1839,56 @@ function ReaderView({
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium" style={{ color: C.inkSoft }}>Size</span>
             <button
-              onClick={() => setSettings((s) => ({ ...s, fontSize: Math.max(15, s.fontSize - 1) }))}
+              onClick={() => setSettings((s) => ({ ...s, fontSize: Math.max(14, s.fontSize - 1) }))}
               className="w-6 h-6 rounded-md text-xs" style={{ background: C.cream, border: `1px solid ${C.line}` }}
             >-</button>
             <span className="text-xs w-5 text-center" style={{ color: C.inkSoft }}>{settings.fontSize}</span>
             <button
-              onClick={() => setSettings((s) => ({ ...s, fontSize: Math.min(26, s.fontSize + 1) }))}
+              onClick={() => setSettings((s) => ({ ...s, fontSize: Math.min(30, s.fontSize + 1) }))}
               className="w-6 h-6 rounded-md text-xs" style={{ background: C.cream, border: `1px solid ${C.line}` }}
             >+</button>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium" style={{ color: C.inkSoft }}>Width</span>
+            {[
+              { k: "narrow", label: "S" },
+              { k: "medium", label: "M" },
+              { k: "wide", label: "L" },
+              { k: "full", label: "Full" },
+            ].map(({ k, label }) => (
+              <button
+                key={k}
+                onClick={() => setSettings((s) => ({ ...s, readerWidth: k }))}
+                className="px-2 py-1 rounded-md text-xs"
+                style={{
+                  background: settings.readerWidth === k ? C.ink : C.cream,
+                  color: settings.readerWidth === k ? C.paper : C.inkSoft,
+                  border: `1px solid ${C.line}`,
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium" style={{ color: C.inkSoft }}>Layout</span>
+            {[
+              { k: false, label: "Scroll" },
+              { k: true, label: "Pages" },
+            ].map(({ k, label }) => (
+              <button
+                key={label}
+                onClick={() => setSettings((s) => ({ ...s, paged: k }))}
+                className="px-2.5 py-1 rounded-md text-xs"
+                style={{
+                  background: settings.paged === k ? C.ink : C.cream,
+                  color: settings.paged === k ? C.paper : C.inkSoft,
+                  border: `1px solid ${C.line}`,
+                }}
+              >
+                {label}
+              </button>
+            ))}
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium" style={{ color: C.inkSoft }}>Page color</span>
@@ -1657,6 +1910,36 @@ function ReaderView({
             >
               Reset
             </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <Volume2 size={13} color={C.inkSoft} />
+            <span className="text-xs font-medium" style={{ color: C.inkSoft }}>Voice</span>
+            <select
+              value={settings.voiceURI || ""}
+              onChange={(e) => setSettings((s) => ({ ...s, voiceURI: e.target.value || null }))}
+              className="text-xs rounded-md px-2 py-1"
+              style={{ background: C.cream, border: `1px solid ${C.line}`, color: C.ink, maxWidth: 190 }}
+            >
+              <option value="">Auto (best available)</option>
+              {voices.map((v) => (
+                <option key={v.voiceURI} value={v.voiceURI}>
+                  {v.name} ({v.lang})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium" style={{ color: C.inkSoft }}>Speed</span>
+            <input
+              type="range"
+              min="0.6"
+              max="1.6"
+              step="0.05"
+              value={settings.rate}
+              onChange={(e) => setSettings((s) => ({ ...s, rate: parseFloat(e.target.value) }))}
+              style={{ width: 90, accentColor: C.goldDeep }}
+            />
+            <span className="text-xs w-8 text-center" style={{ color: C.inkSoft }}>{(settings.rate || 1).toFixed(2)}×</span>
           </div>
         </div>
       )}
@@ -1687,6 +1970,73 @@ function ReaderView({
             className="p-2 rounded-md" style={{ background: C.cream, border: `1px solid ${C.line}` }}
           >
             <Underline size={14} color={C.ink} />
+          </button>
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => exec("strikeThrough")}
+            title="Strikethrough"
+            className="p-2 rounded-md" style={{ background: C.cream, border: `1px solid ${C.line}` }}
+          >
+            <Strikethrough size={14} color={C.ink} />
+          </button>
+
+          <span style={{ width: 1, height: 22, background: C.line, margin: "0 4px" }} />
+
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => exec("formatBlock", "H1")}
+            title="Heading"
+            className="p-2 rounded-md" style={{ background: C.cream, border: `1px solid ${C.line}` }}
+          >
+            <Heading1 size={14} color={C.ink} />
+          </button>
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => exec("formatBlock", "H2")}
+            title="Subheading"
+            className="p-2 rounded-md" style={{ background: C.cream, border: `1px solid ${C.line}` }}
+          >
+            <Heading2 size={14} color={C.ink} />
+          </button>
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => exec("insertUnorderedList")}
+            title="Bulleted list"
+            className="p-2 rounded-md" style={{ background: C.cream, border: `1px solid ${C.line}` }}
+          >
+            <List size={14} color={C.ink} />
+          </button>
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => exec("insertOrderedList")}
+            title="Numbered list"
+            className="p-2 rounded-md" style={{ background: C.cream, border: `1px solid ${C.line}` }}
+          >
+            <ListOrdered size={14} color={C.ink} />
+          </button>
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => exec("formatBlock", "BLOCKQUOTE")}
+            title="Quote"
+            className="p-2 rounded-md" style={{ background: C.cream, border: `1px solid ${C.line}` }}
+          >
+            <QuoteIcon size={14} color={C.ink} />
+          </button>
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={insertLink}
+            title="Add link"
+            className="p-2 rounded-md" style={{ background: C.cream, border: `1px solid ${C.line}` }}
+          >
+            <Link size={14} color={C.ink} />
+          </button>
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => { exec("removeFormat"); exec("formatBlock", "P"); }}
+            title="Clear formatting"
+            className="p-2 rounded-md" style={{ background: C.cream, border: `1px solid ${C.line}` }}
+          >
+            <Eraser size={14} color={C.ink} />
           </button>
 
           <span style={{ width: 1, height: 22, background: C.line, margin: "0 4px" }} />
@@ -1720,6 +2070,31 @@ function ReaderView({
 
           <span style={{ width: 1, height: 22, background: C.line, margin: "0 4px" }} />
 
+          <span style={{ width: 1, height: 22, background: C.line, margin: "0 4px" }} />
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs" style={{ color: C.inkSoft }}>Size</span>
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setSettings((s) => ({ ...s, fontSize: Math.max(14, s.fontSize - 1) }))}
+              className="w-7 h-7 rounded-md flex items-center justify-center"
+              style={{ background: C.cream, border: `1px solid ${C.line}` }}
+            >
+              <Minus size={13} color={C.ink} />
+            </button>
+            <span className="text-xs text-center" style={{ color: C.inkSoft, width: 22 }}>{settings.fontSize}</span>
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setSettings((s) => ({ ...s, fontSize: Math.min(30, s.fontSize + 1) }))}
+              className="w-7 h-7 rounded-md flex items-center justify-center"
+              style={{ background: C.cream, border: `1px solid ${C.line}` }}
+            >
+              <Plus size={13} color={C.ink} />
+            </button>
+          </div>
+
+          <span style={{ width: 1, height: 22, background: C.line, margin: "0 4px" }} />
+
           <div className="flex items-center gap-1.5">
             <Palette size={13} color={C.inkSoft} />
             <span className="text-xs" style={{ color: C.inkSoft }}>Page background</span>
@@ -1746,28 +2121,73 @@ function ReaderView({
       )}
 
       {/* content */}
+      {settings.paged && !editMode && !reading.active ? (
+        <PagedReader
+          bg={effectiveBg}
+          maxWidth={maxWidth}
+          settings={settings}
+          readerText={readerText}
+          onEdge={collapseSidebar}
+        >
+          <p style={{ color: readerText, opacity: 0.55, fontSize: 12.5, fontFamily: FONTS.sans, fontWeight: 600, letterSpacing: "0.06em" }}>
+            {page.edited.toUpperCase()}
+          </p>
+          <h1 style={{ fontFamily: FONTS.display, fontWeight: 700, fontSize: 34, color: readerText, marginTop: 8, marginBottom: 28, lineHeight: 1.2 }}>
+            {page.title}
+          </h1>
+          <div
+            className="imported-html"
+            style={{ fontFamily, fontSize: settings.fontSize, lineHeight: settings.lineHeight, color: readerText }}
+            dangerouslySetInnerHTML={{ __html: pageHtml }}
+          />
+        </PagedReader>
+      ) : (
       <div
         className="flex-1 overflow-y-auto scrollbar-thin"
         style={{ background: effectiveBg }}
         onClick={!editMode ? collapseSidebar : undefined}
       >
-        <div className="max-w-2xl mx-auto px-8 py-14">
+        <div className="mx-auto px-8 py-14" style={{ maxWidth: maxWidth ? maxWidth : "none", width: "100%" }}>
           <p style={{ color: readerText, opacity: 0.55, fontSize: 12.5, fontFamily: FONTS.sans, fontWeight: 600, letterSpacing: "0.06em" }}>
             {page.edited.toUpperCase()}
           </p>
-          <h1
-            style={{
-              fontFamily: FONTS.display,
-              fontWeight: 700,
-              fontSize: 34,
-              color: readerText,
-              marginTop: 8,
-              marginBottom: 28,
-              lineHeight: 1.2,
-            }}
-          >
-            {page.title}
-          </h1>
+          {editMode ? (
+            <input
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={commitTitle}
+              placeholder="Untitled"
+              style={{
+                fontFamily: FONTS.display,
+                fontWeight: 700,
+                fontSize: 34,
+                color: readerText,
+                marginTop: 8,
+                marginBottom: 28,
+                lineHeight: 1.2,
+                width: "100%",
+                background: "transparent",
+                border: "none",
+                borderBottom: `2px solid ${C.line}`,
+                outline: "none",
+                padding: "2px 0",
+              }}
+            />
+          ) : (
+            <h1
+              style={{
+                fontFamily: FONTS.display,
+                fontWeight: 700,
+                fontSize: 34,
+                color: readerText,
+                marginTop: 8,
+                marginBottom: 28,
+                lineHeight: 1.2,
+              }}
+            >
+              {page.title}
+            </h1>
+          )}
 
           {page.scripture && (
             <div
@@ -1785,6 +2205,7 @@ function ReaderView({
               contentEditable
               suppressContentEditableWarning
               onBlur={handleBlur}
+              className="imported-html"
               style={{
                 fontFamily,
                 fontSize: settings.fontSize,
@@ -1839,6 +2260,7 @@ function ReaderView({
           )}
         </div>
       </div>
+      )}
 
       {/* progress */}
       <div className="px-6 py-2 flex items-center gap-3 flex-shrink-0" style={{ background: C.paper, borderTop: `1px solid ${C.line}` }}>

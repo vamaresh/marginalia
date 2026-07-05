@@ -30,3 +30,7 @@ html, body, #root {
 .imported-html table { border-collapse: collapse; margin: 0 0 0.85em; width: 100%; }
 .imported-html th, .imported-html td { border: 1px solid rgba(128,128,128,0.4); padding: 0.4em 0.6em; text-align: left; }
 .imported-html hr { border: none; border-top: 1px solid rgba(128,128,128,0.35); margin: 1em 0; }
+
+/* Keep images and list items intact when the reader paginates into columns. */
+.imported-html img, .imported-html li, .imported-html blockquote, .imported-html table { break-inside: avoid; }
+.imported-html h1, .imported-html h2, .imported-html h3 { break-after: avoid; }
