@@ -1,4 +1,5 @@
 import { storage } from "./lib/storage";
+import { isConfigured as onenoteConfigured, getAccessToken, fetchOneNoteData } from "./lib/onenote";
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   BookOpen, ChevronRight, ChevronDown, Search, RefreshCw, Volume2, VolumeX,
@@ -403,8 +404,11 @@ export default function App() {
   const settingsLoaded = useRef(false);
 
   const [syncOpen, setSyncOpen] = useState(false);
-  const [syncStep, setSyncStep] = useState("intro"); // intro | connecting | found | importing | done
+  const [syncStep, setSyncStep] = useState("intro"); // intro | connecting | found | importing | done | error
   const [lastSynced, setLastSynced] = useState(null);
+  const [discovered, setDiscovered] = useState([]);
+  const [syncError, setSyncError] = useState(null);
+  const [syncCounts, setSyncCounts] = useState({ notebooks: 0, sections: 0, pages: 0 });
 
   const [reading, setReading] = useState({ active: false, idx: -1 });
   const [podcastOpen, setPodcastOpen] = useState(false);
@@ -815,61 +819,66 @@ Only include "related" entries whose id actually appears in the list above. Keep
     }
   }
 
-  /* -------------------- simulated OneNote sync -------------------- */
-  function runSync() {
+  /* -------------------- real OneNote sync (Microsoft Graph) -------------------- */
+  const NB_COLORS = [C.plum, C.teal, C.goldDeep, C.gold];
+
+  async function runSync() {
+    setSyncError(null);
     setSyncStep("connecting");
-    setTimeout(() => setSyncStep("found"), 1300);
+    try {
+      const token = await getAccessToken();
+      const data = await fetchOneNoteData(token, { colors: NB_COLORS });
+      if (!data.length) {
+        setSyncError("No OneNote notebooks with pages were found on this account.");
+        setSyncStep("error");
+        return;
+      }
+      setDiscovered(data);
+      setSyncStep("found");
+    } catch (err) {
+      setSyncError(err.message || "Couldn't connect to OneNote.");
+      setSyncStep("error");
+    }
   }
 
   function importFromOneNote() {
+    if (!discovered.length) return;
     setSyncStep("importing");
-    setTimeout(() => {
-      setNotebooks((prev) => {
-        if (prev.find((n) => n.id === "nb-imported")) return prev;
-        return [
-          ...prev,
-          {
-            id: "nb-imported",
-            name: "Home Renovation",
-            color: C.plum,
-            synced: true,
-            sections: [
-              {
-                id: "sec-reno",
-                name: "Kitchen Project",
-                pages: [
-                  {
-                    id: "p-quotes",
-                    title: "Kitchen Quotes Comparison",
-                    edited: "just imported",
-                    content: [
-                      "Three contractor quotes in now. The lowest bid excludes appliance installation, which the other two include, so the real gap between them is smaller than it first looks once that's added back in.",
-                      "Contractor B is the only one who asked about the load-bearing wall before quoting, which is either a good sign of thoroughness or a sign the other two didn't look closely enough. Worth asking directly before deciding.",
-                    ],
-                  },
-                  {
-                    id: "p-contractor",
-                    title: "Contractor Notes",
-                    edited: "just imported",
-                    content: [
-                      "Contractor B available to start in three weeks, Contractor C not until September. Timeline matters more than the few hundred dollars separating their quotes, especially since we're hoping to have this done before the holidays.",
-                    ],
-                  },
-                ],
-              },
-            ],
-          },
-        ];
+
+    setNotebooks((prev) => {
+      const byId = new Map(prev.map((n) => [n.id, n]));
+      for (const nb of discovered) byId.set(nb.id, nb); // replace/add on re-sync
+      return Array.from(byId.values());
+    });
+
+    const counts = discovered.reduce(
+      (acc, nb) => {
+        acc.notebooks += 1;
+        acc.sections += nb.sections.length;
+        acc.pages += nb.sections.reduce((s, sec) => s + sec.pages.length, 0);
+        return acc;
+      },
+      { notebooks: 0, sections: 0, pages: 0 }
+    );
+    setSyncCounts(counts);
+
+    setExpandedNb((e) => {
+      const next = { ...e };
+      discovered.forEach((nb) => {
+        next[nb.id] = true;
       });
-      setExpandedNb((e) => ({ ...e, "nb-imported": true }));
-      setLastSynced(new Date());
-      setSyncStep("done");
-    }, 1600);
+      return next;
+    });
+    setLastSynced(new Date());
+    setSyncStep("done");
   }
 
   function closeSync() {
     setSyncOpen(false);
-    setTimeout(() => setSyncStep("intro"), 300);
+    setTimeout(() => {
+      setSyncStep("intro");
+      setSyncError(null);
+    }, 300);
   }
 
   /* -------------------- theme resolution -------------------- */
@@ -1139,6 +1148,10 @@ Only include "related" entries whose id actually appears in the list above. Keep
       {syncOpen && (
         <SyncModal
           step={syncStep}
+          configured={onenoteConfigured()}
+          discovered={discovered}
+          error={syncError}
+          counts={syncCounts}
           onConnect={runSync}
           onImport={importFromOneNote}
           onClose={closeSync}
@@ -1900,7 +1913,12 @@ function SermonInsightsDrawer({ page, status, data, onOpenPage, onRetry, onClose
 /* ---------------------------------------------------------------------- */
 /* Sync modal                                                              */
 /* ---------------------------------------------------------------------- */
-function SyncModal({ step, onConnect, onImport, onClose }) {
+function SyncModal({ step, configured, discovered = [], error, counts, onConnect, onImport, onClose }) {
+  const totalSections = discovered.reduce((s, nb) => s + nb.sections.length, 0);
+  const totalPages = discovered.reduce(
+    (s, nb) => s + nb.sections.reduce((p, sec) => p + sec.pages.length, 0),
+    0
+  );
   return (
     <div
       className="fixed inset-0 flex items-center justify-center z-30 px-4"
@@ -1926,43 +1944,74 @@ function SyncModal({ step, onConnect, onImport, onClose }) {
           {step === "intro" && (
             <>
               <p style={{ color: C.inkSoft, fontSize: 14, lineHeight: 1.6 }}>
-                Marginalia can pull your notebooks, sections, and pages in from OneNote and keep them updated.
+                Marginalia connects to your real OneNote account through Microsoft Graph and pulls
+                your notebooks, sections, and pages in — formatting preserved.
               </p>
-              <button
-                onClick={onConnect}
-                className="w-full flex items-center justify-center gap-2 mt-5 py-2.5 rounded-md text-sm font-medium"
-                style={{ background: C.ink, color: C.paper, border: "none" }}
-              >
-                <Link2 size={14} /> Connect Microsoft account
-              </button>
-              <p className="text-xs mt-4" style={{ color: C.inkSoft, opacity: 0.75, lineHeight: 1.5 }}>
-                This preview simulates the Microsoft Graph import flow with sample data, so you can see how sync will feel end-to-end.
-              </p>
+              {configured ? (
+                <>
+                  <button
+                    onClick={onConnect}
+                    className="w-full flex items-center justify-center gap-2 mt-5 py-2.5 rounded-md text-sm font-medium"
+                    style={{ background: C.ink, color: C.paper, border: "none" }}
+                  >
+                    <Link2 size={14} /> Connect Microsoft account
+                  </button>
+                  <p className="text-xs mt-4" style={{ color: C.inkSoft, opacity: 0.75, lineHeight: 1.5 }}>
+                    You'll sign in with Microsoft in a popup. Marginalia only requests read access
+                    to your notes (Notes.Read).
+                  </p>
+                </>
+              ) : (
+                <div
+                  className="mt-5 p-3 rounded-lg"
+                  style={{ border: `1px solid ${C.line}`, background: C.paper }}
+                >
+                  <p style={{ fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 4 }}>
+                    OneNote sync isn't configured yet
+                  </p>
+                  <p style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.5 }}>
+                    Add your Azure app's client ID as <code>VITE_MS_CLIENT_ID</code> in the project's
+                    environment variables, then redeploy to enable real sign-in.
+                  </p>
+                </div>
+              )}
             </>
           )}
 
           {step === "connecting" && (
             <div className="flex flex-col items-center gap-3 py-6">
               <Loader2 size={22} color={C.gold} style={{ animation: "spin 1s linear infinite" }} />
-              <p style={{ color: C.inkSoft, fontSize: 14 }}>Connecting to your Microsoft account…</p>
+              <p style={{ color: C.inkSoft, fontSize: 14 }}>Connecting to OneNote and reading your notebooks…</p>
             </div>
           )}
 
           {step === "found" && (
             <>
               <p style={{ color: C.ink, fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
-                Found 1 notebook ready to import
+                Found {discovered.length} notebook{discovered.length === 1 ? "" : "s"} · {totalSections} section
+                {totalSections === 1 ? "" : "s"} · {totalPages} page{totalPages === 1 ? "" : "s"}
               </p>
-              <div
-                className="flex items-center gap-3 p-3 rounded-lg"
-                style={{ border: `1px solid ${C.line}`, background: C.paper }}
-              >
-                <span className="w-2.5 h-8 rounded-sm" style={{ background: C.plum }} />
-                <div>
-                  <p style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>Home Renovation</p>
-                  <p style={{ fontSize: 12, color: C.inkSoft }}>1 section · 2 pages</p>
-                </div>
-                <Check size={16} color={C.teal} style={{ marginLeft: "auto" }} />
+              <div className="flex flex-col gap-2 max-h-56 overflow-auto">
+                {discovered.map((nb) => {
+                  const secs = nb.sections.length;
+                  const pgs = nb.sections.reduce((p, sec) => p + sec.pages.length, 0);
+                  return (
+                    <div
+                      key={nb.id}
+                      className="flex items-center gap-3 p-3 rounded-lg"
+                      style={{ border: `1px solid ${C.line}`, background: C.paper }}
+                    >
+                      <span className="w-2.5 h-8 rounded-sm" style={{ background: nb.color }} />
+                      <div>
+                        <p style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>{nb.name}</p>
+                        <p style={{ fontSize: 12, color: C.inkSoft }}>
+                          {secs} section{secs === 1 ? "" : "s"} · {pgs} page{pgs === 1 ? "" : "s"}
+                        </p>
+                      </div>
+                      <Check size={16} color={C.teal} style={{ marginLeft: "auto" }} />
+                    </div>
+                  );
+                })}
               </div>
               <button
                 onClick={onImport}
@@ -1981,13 +2030,33 @@ function SyncModal({ step, onConnect, onImport, onClose }) {
             </div>
           )}
 
+          {step === "error" && (
+            <div className="flex flex-col items-center text-center gap-3 py-4">
+              <div className="w-11 h-11 rounded-full flex items-center justify-center" style={{ background: `${C.gold}22` }}>
+                <X size={22} color={C.goldDeep} />
+              </div>
+              <p style={{ fontSize: 14.5, fontWeight: 600, color: C.ink }}>Couldn't sync OneNote</p>
+              <p style={{ fontSize: 13, color: C.inkSoft, lineHeight: 1.5 }}>{error}</p>
+              <button
+                onClick={onConnect}
+                className="mt-2 px-5 py-2 rounded-md text-sm font-medium"
+                style={{ background: C.ink, color: C.paper, border: "none" }}
+              >
+                Try again
+              </button>
+            </div>
+          )}
+
           {step === "done" && (
             <div className="flex flex-col items-center text-center gap-3 py-4">
               <div className="w-11 h-11 rounded-full flex items-center justify-center" style={{ background: `${C.teal}22` }}>
                 <CheckCircle2 size={22} color={C.tealDeep} />
               </div>
-              <p style={{ fontSize: 15, fontWeight: 600, color: C.ink }}>Imported 1 notebook, 1 section, 2 pages</p>
-              <p style={{ fontSize: 13, color: C.inkSoft }}>Find it in your sidebar as "Home Renovation."</p>
+              <p style={{ fontSize: 15, fontWeight: 600, color: C.ink }}>
+                Imported {counts.notebooks} notebook{counts.notebooks === 1 ? "" : "s"}, {counts.sections} section
+                {counts.sections === 1 ? "" : "s"}, {counts.pages} page{counts.pages === 1 ? "" : "s"}
+              </p>
+              <p style={{ fontSize: 13, color: C.inkSoft }}>Find your notebooks in the sidebar.</p>
               <button
                 onClick={onClose}
                 className="mt-2 px-5 py-2 rounded-md text-sm font-medium"
