@@ -7,7 +7,7 @@ import {
   Settings2, X, Play, Pause, Sun, Moon, Coffee, Type, Check, Loader2,
   Headphones, ArrowLeft, Sparkles, Link2, CheckCircle2, Square, Clock,
   PanelLeftClose, PanelLeft, Quote, AlertTriangle, Pencil, Palette,
-  Bold, Italic, Underline, Highlighter
+  Bold, Italic, Underline, Highlighter, Plus, Trash2, FilePlus, FolderPlus, Pencil as PencilIcon
 } from "lucide-react";
 
 /* ---------------------------------------------------------------------- */
@@ -390,6 +390,8 @@ function countTotalSentences(page) {
 /* ---------------------------------------------------------------------- */
 export default function App() {
   const [notebooks, setNotebooks] = useState(INITIAL_NOTEBOOKS);
+  const notebooksLoaded = useRef(false);
+  const [editMode, setEditMode] = useState(false);
   const [expandedNb, setExpandedNb] = useState({ "nb-work": true });
   const [expandedSec, setExpandedSec] = useState({ "sec-roadmap": true });
   const [selectedPageId, setSelectedPageId] = useState(null);
@@ -502,7 +504,143 @@ export default function App() {
     });
   }
 
-  /* -------------------- voices -------------------- */
+  /* -------------------- persist full notebook tree -------------------- */
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await storage.get("marginalia-notebooks");
+        if (r && r.value) {
+          const parsed = JSON.parse(r.value);
+          if (Array.isArray(parsed) && parsed.length) setNotebooks(parsed);
+        }
+      } catch (e) {
+        /* nothing saved yet */
+      }
+      notebooksLoaded.current = true;
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!notebooksLoaded.current) return;
+    storage.set("marginalia-notebooks", JSON.stringify(notebooks)).catch(() => {});
+  }, [notebooks]);
+
+  /* -------------------- structure editing -------------------- */
+  const newId = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+  function addNotebook() {
+    const name = window.prompt("New notebook name:", "New notebook");
+    if (!name || !name.trim()) return;
+    const id = newId("nb");
+    const secId = newId("sec");
+    setNotebooks((prev) => [
+      ...prev,
+      {
+        id,
+        name: name.trim(),
+        color: ["#5B4570", "#2B5D5A", "#8A6D22", "#A8862E"][prev.length % 4],
+        sections: [{ id: secId, name: "New section", pages: [] }],
+      },
+    ]);
+    setExpandedNb((e) => ({ ...e, [id]: true }));
+    setExpandedSec((e) => ({ ...e, [secId]: true }));
+  }
+
+  function renameNotebook(nb) {
+    const name = window.prompt("Rename notebook:", nb.name);
+    if (!name || !name.trim()) return;
+    setNotebooks((prev) => prev.map((n) => (n.id === nb.id ? { ...n, name: name.trim() } : n)));
+  }
+
+  function deleteNotebook(nb) {
+    if (!window.confirm(`Delete notebook "${nb.name}" and all its sections and pages?`)) return;
+    const ids = new Set(nb.sections.flatMap((s) => s.pages.map((p) => p.id)));
+    setNotebooks((prev) => prev.filter((n) => n.id !== nb.id));
+    if (ids.has(selectedPageId)) setSelectedPageId(null);
+  }
+
+  function addSection(nb) {
+    const name = window.prompt("New section name:", "New section");
+    if (!name || !name.trim()) return;
+    const secId = newId("sec");
+    setNotebooks((prev) =>
+      prev.map((n) =>
+        n.id === nb.id ? { ...n, sections: [...n.sections, { id: secId, name: name.trim(), pages: [] }] } : n
+      )
+    );
+    setExpandedNb((e) => ({ ...e, [nb.id]: true }));
+    setExpandedSec((e) => ({ ...e, [secId]: true }));
+  }
+
+  function renameSection(nb, sec) {
+    const name = window.prompt("Rename section:", sec.name);
+    if (!name || !name.trim()) return;
+    setNotebooks((prev) =>
+      prev.map((n) =>
+        n.id === nb.id
+          ? { ...n, sections: n.sections.map((s) => (s.id === sec.id ? { ...s, name: name.trim() } : s)) }
+          : n
+      )
+    );
+  }
+
+  function deleteSection(nb, sec) {
+    if (!window.confirm(`Delete section "${sec.name}" and its ${sec.pages.length} page(s)?`)) return;
+    const ids = new Set(sec.pages.map((p) => p.id));
+    setNotebooks((prev) =>
+      prev.map((n) => (n.id === nb.id ? { ...n, sections: n.sections.filter((s) => s.id !== sec.id) } : n))
+    );
+    if (ids.has(selectedPageId)) setSelectedPageId(null);
+  }
+
+  function addPage(nb, sec) {
+    const title = window.prompt("New page title:", "New page");
+    if (!title || !title.trim()) return;
+    const pageId = newId("pg");
+    setNotebooks((prev) =>
+      prev.map((n) =>
+        n.id === nb.id
+          ? {
+              ...n,
+              sections: n.sections.map((s) =>
+                s.id === sec.id
+                  ? { ...s, pages: [...s.pages, { id: pageId, title: title.trim(), edited: "just now", content: [""] }] }
+                  : s
+              ),
+            }
+          : n
+      )
+    );
+    setExpandedSec((e) => ({ ...e, [sec.id]: true }));
+    setSelectedPageId(pageId);
+  }
+
+  function renamePage(pg) {
+    const title = window.prompt("Rename page:", pg.title);
+    if (!title || !title.trim()) return;
+    setNotebooks((prev) =>
+      prev.map((n) => ({
+        ...n,
+        sections: n.sections.map((s) => ({
+          ...s,
+          pages: s.pages.map((p) => (p.id === pg.id ? { ...p, title: title.trim() } : p)),
+        })),
+      }))
+    );
+  }
+
+  function deletePage(pg) {
+    if (!window.confirm(`Delete page "${pg.title}"?`)) return;
+    setNotebooks((prev) =>
+      prev.map((n) => ({
+        ...n,
+        sections: n.sections.map((s) => ({ ...s, pages: s.pages.filter((p) => p.id !== pg.id) })),
+      }))
+    );
+    if (selectedPageId === pg.id) setSelectedPageId(null);
+  }
+
+
   useEffect(() => {
     function loadVoices() {
       voicesRef.current = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
@@ -983,27 +1121,36 @@ Only include "related" entries whose id actually appears in the list above. Keep
             const nbOpen = query.trim() ? true : expandedNb[nb.id];
             return (
             <div key={nb.id} className="mb-1">
-              <button
-                onClick={() => setExpandedNb((e) => ({ ...e, [nb.id]: !e[nb.id] }))}
-                className="w-full flex items-center gap-2 px-2 py-2 rounded-md"
-                style={{ background: "none", border: "none", textAlign: "left" }}
-              >
-                {nbOpen ? (
-                  <ChevronDown size={14} color={C.inkSoft} />
-                ) : (
-                  <ChevronRight size={14} color={C.inkSoft} />
+              <div className="w-full flex items-center gap-1 pr-1 rounded-md group" style={{ background: "none" }}>
+                <button
+                  onClick={() => setExpandedNb((e) => ({ ...e, [nb.id]: !e[nb.id] }))}
+                  className="flex-1 min-w-0 flex items-center gap-2 px-2 py-2 rounded-md"
+                  style={{ background: "none", border: "none", textAlign: "left" }}
+                >
+                  {nbOpen ? (
+                    <ChevronDown size={14} color={C.inkSoft} />
+                  ) : (
+                    <ChevronRight size={14} color={C.inkSoft} />
+                  )}
+                  <span
+                    className="w-2.5 h-6 rounded-sm flex-shrink-0"
+                    style={{ background: nb.color }}
+                  />
+                  <span className="truncate" style={{ fontFamily: FONTS.display, fontWeight: 600, fontSize: 14.5, color: C.ink }}>
+                    {nb.name}
+                  </span>
+                  {nb.synced && !editMode && (
+                    <CheckCircle2 size={12} color={C.teal} style={{ marginLeft: "auto" }} />
+                  )}
+                </button>
+                {editMode && (
+                  <span className="flex items-center gap-0.5 flex-shrink-0">
+                    <IconBtn title="Rename notebook" onClick={() => renameNotebook(nb)}><PencilIcon size={13} color={C.inkSoft} /></IconBtn>
+                    <IconBtn title="Add section" onClick={() => addSection(nb)}><FolderPlus size={13} color={C.inkSoft} /></IconBtn>
+                    <IconBtn title="Delete notebook" onClick={() => deleteNotebook(nb)}><Trash2 size={13} color={C.inkSoft} /></IconBtn>
+                  </span>
                 )}
-                <span
-                  className="w-2.5 h-6 rounded-sm flex-shrink-0"
-                  style={{ background: nb.color }}
-                />
-                <span style={{ fontFamily: FONTS.display, fontWeight: 600, fontSize: 14.5, color: C.ink }}>
-                  {nb.name}
-                </span>
-                {nb.synced && (
-                  <CheckCircle2 size={12} color={C.teal} style={{ marginLeft: "auto" }} />
-                )}
-              </button>
+              </div>
 
               {nbOpen && (
                 <div className="ml-4 pl-2" style={{ borderLeft: `1px solid ${C.line}` }}>
@@ -1012,51 +1159,68 @@ Only include "related" entries whose id actually appears in the list above. Keep
                     const secOpen = query.trim() ? true : expandedSec[secKey];
                     return (
                       <div key={secKey}>
-                        <button
-                          onClick={() => setExpandedSec((e) => ({ ...e, [secKey]: !e[secKey] }))}
-                          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md"
-                          style={{ background: "none", border: "none", textAlign: "left" }}
-                        >
-                          {secOpen ? (
-                            <ChevronDown size={12} color={C.inkSoft} />
-                          ) : (
-                            <ChevronRight size={12} color={C.inkSoft} />
+                        <div className="w-full flex items-center gap-1 pr-1">
+                          <button
+                            onClick={() => setExpandedSec((e) => ({ ...e, [secKey]: !e[secKey] }))}
+                            className="flex-1 min-w-0 flex items-center gap-2 px-2 py-1.5 rounded-md"
+                            style={{ background: "none", border: "none", textAlign: "left" }}
+                          >
+                            {secOpen ? (
+                              <ChevronDown size={12} color={C.inkSoft} />
+                            ) : (
+                              <ChevronRight size={12} color={C.inkSoft} />
+                            )}
+                            <span className="truncate" style={{ fontSize: 13, color: C.inkSoft, fontWeight: 600 }}>
+                              {sec.name}
+                            </span>
+                          </button>
+                          {editMode && (
+                            <span className="flex items-center gap-0.5 flex-shrink-0">
+                              <IconBtn title="Rename section" onClick={() => renameSection(nb, sec)}><PencilIcon size={12} color={C.inkSoft} /></IconBtn>
+                              <IconBtn title="Add page" onClick={() => addPage(nb, sec)}><FilePlus size={12} color={C.inkSoft} /></IconBtn>
+                              <IconBtn title="Delete section" onClick={() => deleteSection(nb, sec)}><Trash2 size={12} color={C.inkSoft} /></IconBtn>
+                            </span>
                           )}
-                          <span style={{ fontSize: 13, color: C.inkSoft, fontWeight: 600 }}>
-                            {sec.name}
-                          </span>
-                        </button>
+                        </div>
                         {secOpen && (
                           <div className="ml-4">
                             {sec.pages.map((pg) => {
                               const titleMatch = !query.trim() || pg.title.toLowerCase().includes(query.toLowerCase());
                               const snippet = query.trim() && !titleMatch ? findSnippet(pg, query) : null;
                               return (
-                                <button
-                                  key={pg.id}
-                                  onClick={() => openPage(pg.id)}
-                                  className="w-full text-left px-2 py-1.5 rounded-md mb-0.5"
-                                  style={{
-                                    background: selectedPageId === pg.id ? C.cream : "none",
-                                    border: "none",
-                                  }}
-                                >
-                                  <span
+                                <div key={pg.id} className="flex items-center gap-1 pr-1">
+                                  <button
+                                    onClick={() => openPage(pg.id)}
+                                    className="flex-1 min-w-0 text-left px-2 py-1.5 rounded-md mb-0.5"
                                     style={{
-                                      fontSize: 13,
-                                      color: selectedPageId === pg.id ? C.ink : C.inkSoft,
-                                      fontWeight: selectedPageId === pg.id ? 600 : 400,
-                                      display: "block",
+                                      background: selectedPageId === pg.id ? C.cream : "none",
+                                      border: "none",
                                     }}
                                   >
-                                    {pg.title}
-                                  </span>
-                                  {snippet && (
-                                    <span style={{ fontSize: 11, color: C.inkSoft, opacity: 0.75, display: "block", marginTop: 1 }}>
-                                      {snippet}
+                                    <span
+                                      className="truncate"
+                                      style={{
+                                        fontSize: 13,
+                                        color: selectedPageId === pg.id ? C.ink : C.inkSoft,
+                                        fontWeight: selectedPageId === pg.id ? 600 : 400,
+                                        display: "block",
+                                      }}
+                                    >
+                                      {pg.title}
+                                    </span>
+                                    {snippet && (
+                                      <span style={{ fontSize: 11, color: C.inkSoft, opacity: 0.75, display: "block", marginTop: 1 }}>
+                                        {snippet}
+                                      </span>
+                                    )}
+                                  </button>
+                                  {editMode && (
+                                    <span className="flex items-center gap-0.5 flex-shrink-0">
+                                      <IconBtn title="Rename page" onClick={() => renamePage(pg)}><PencilIcon size={12} color={C.inkSoft} /></IconBtn>
+                                      <IconBtn title="Delete page" onClick={() => deletePage(pg)}><Trash2 size={12} color={C.inkSoft} /></IconBtn>
                                     </span>
                                   )}
-                                </button>
+                                </div>
                               );
                             })}
                           </div>
@@ -1072,14 +1236,38 @@ Only include "related" entries whose id actually appears in the list above. Keep
         </div>
 
         <div className="p-3" style={{ borderTop: `1px solid ${C.line}` }}>
-          <button
-            onClick={() => setSyncOpen(true)}
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-md text-sm font-medium"
-            style={{ background: C.ink, color: C.paper, border: "none" }}
-          >
-            <RefreshCw size={14} />
-            Sync OneNote
-          </button>
+          {editMode && (
+            <button
+              onClick={addNotebook}
+              className="w-full flex items-center justify-center gap-2 py-2 mb-2 rounded-md text-sm font-medium"
+              style={{ background: C.cream, color: C.ink, border: `1px solid ${C.line}` }}
+            >
+              <Plus size={14} /> New notebook
+            </button>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSyncOpen(true)}
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-md text-sm font-medium"
+              style={{ background: C.ink, color: C.paper, border: "none" }}
+            >
+              <RefreshCw size={14} />
+              Sync OneNote
+            </button>
+            <button
+              onClick={() => setEditMode((v) => !v)}
+              title={editMode ? "Done editing" : "Edit notebooks & sections"}
+              className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-md text-sm font-medium"
+              style={{
+                background: editMode ? C.goldDeep : C.cream,
+                color: editMode ? C.cream : C.ink,
+                border: `1px solid ${editMode ? C.goldDeep : C.line}`,
+              }}
+            >
+              {editMode ? <Check size={14} /> : <Pencil size={14} />}
+              {editMode ? "Done" : "Edit"}
+            </button>
+          </div>
           {lastSynced && (
             <p className="text-xs mt-2 text-center" style={{ color: C.inkSoft }}>
               Last synced {lastSynced.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -1928,6 +2116,19 @@ function SermonInsightsDrawer({ page, status, data, onOpenPage, onRetry, onClose
 /* ---------------------------------------------------------------------- */
 /* Sync modal                                                              */
 /* ---------------------------------------------------------------------- */
+function IconBtn({ title, onClick, children }) {
+  return (
+    <button
+      title={title}
+      onClick={onClick}
+      className="flex items-center justify-center rounded"
+      style={{ background: "none", border: "none", padding: 3, cursor: "pointer" }}
+    >
+      {children}
+    </button>
+  );
+}
+
 function SyncModal({ step, configured, discovered = [], error, counts, onConnect, onLocalFiles, onImport, onClose }) {
   const fileRef = useRef(null);
   const totalSections = discovered.reduce((s, nb) => s + nb.sections.length, 0);
@@ -1962,7 +2163,7 @@ function SyncModal({ step, configured, discovered = [], error, counts, onConnect
               <input
                 ref={fileRef}
                 type="file"
-                accept=".json,.one"
+                accept=".pdf,.docx,.html,.htm,.md,.markdown,.txt,.text,.json,.one"
                 multiple
                 style={{ display: "none" }}
                 onChange={(e) => {
@@ -1971,24 +2172,25 @@ function SyncModal({ step, configured, discovered = [], error, counts, onConnect
                 }}
               />
 
-              {/* Option 1: sync from this computer (no Azure needed) */}
+              {/* Option 1: import exported notes (no Azure needed) */}
               <p style={{ color: C.ink, fontSize: 13.5, fontWeight: 600, marginBottom: 4 }}>
-                Sync from this computer
+                Import from this computer
               </p>
               <p style={{ color: C.inkSoft, fontSize: 13, lineHeight: 1.55 }}>
-                Import straight from OneNote on this machine — no Microsoft sign-in needed. Pick a
-                <code> marginalia-onenote.json</code> export, or your OneNote <code>.one</code> section files.
+                Export your OneNote notes and drop the files here — no Microsoft sign-in needed.
+                In OneNote choose <b>File → Print → Save as PDF</b> (or export as PDF), then pick the
+                files below. Also accepts DOCX, HTML, Markdown and TXT.
               </p>
               <button
                 onClick={() => fileRef.current && fileRef.current.click()}
                 className="w-full flex items-center justify-center gap-2 mt-4 py-2.5 rounded-md text-sm font-medium"
                 style={{ background: C.ink, color: C.paper, border: "none" }}
               >
-                <Link2 size={14} /> Choose files from this computer
+                <Link2 size={14} /> Choose exported files
               </button>
               <p className="text-xs mt-3" style={{ color: C.inkSoft, opacity: 0.8, lineHeight: 1.5 }}>
-                Tip: run <code>npm run onenote:local</code> to auto-generate the JSON export from your
-                installed OneNote, then choose it here.
+                You can select many files at once. Each file becomes a page; you can rename,
+                reorganize, add or delete notebooks and sections afterwards.
               </p>
 
               {/* Option 2: cloud sign-in via Microsoft Graph */}

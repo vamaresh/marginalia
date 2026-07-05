@@ -19,8 +19,31 @@ function notebookFor(file) {
   return "OneNote (local)";
 }
 
+const DOC_EXTS = [".pdf", ".docx", ".html", ".htm", ".md", ".markdown", ".txt", ".text"];
+function isSupportedDoc(name) {
+  const n = name.toLowerCase();
+  return DOC_EXTS.some((ext) => n.endsWith(ext));
+}
+function titleFromFile(name) {
+  return name.replace(/\.[^.]+$/, "").replace(/\s+/g, " ").trim() || "Untitled";
+}
+
 function baseSection(name) {
   return sectionNameFromFile(name);
+}
+
+// Decide notebook + section for an exported document based on any folder structure.
+function docGrouping(file) {
+  const rel = file.webkitRelativePath || "";
+  const parts = rel.split("/").filter(Boolean);
+  if (parts.length >= 3) {
+    // pickedFolder / notebook / [section?] / file
+    const nb = parts[1];
+    const sec = parts.length >= 4 ? parts[2] : nb;
+    return { nb, sec };
+  }
+  if (parts.length === 2) return { nb: parts[0], sec: parts[0] };
+  return { nb: "Imported notes", sec: "Imported" };
 }
 
 function normalizeNotebooks(raw) {
@@ -57,9 +80,10 @@ export async function importLocalFiles(fileList) {
 
   const jsonFiles = files.filter((f) => f.name.toLowerCase().endsWith(".json"));
   const oneFiles = files.filter((f) => f.name.toLowerCase().endsWith(".one"));
+  const docFiles = files.filter((f) => isSupportedDoc(f.name));
 
-  if (!jsonFiles.length && !oneFiles.length) {
-    throw new Error("Pick a .json export or one or more .one section files.");
+  if (!jsonFiles.length && !oneFiles.length && !docFiles.length) {
+    throw new Error("Pick exported notes (PDF, DOCX, HTML, TXT), a .json export, or .one section files.");
   }
 
   const notebooks = [];
@@ -74,6 +98,55 @@ export async function importLocalFiles(fileList) {
       throw new Error(`${jf.name} isn't valid JSON.`);
     }
     notebooks.push(...normalizeNotebooks(parsed));
+  }
+
+  // 2) Exported documents (PDF / DOCX / HTML / MD / TXT) — clean text.
+  if (docFiles.length) {
+    const { parseDocFile } = await import("./importDocs");
+    const byNotebook = new Map();
+    for (const f of docFiles) {
+      let paragraphs;
+      try {
+        paragraphs = await parseDocFile(f);
+      } catch (e) {
+        paragraphs = [`(Couldn't read ${f.name}: ${e.message})`];
+      }
+      const { nb, sec } = docGrouping(f);
+      const title = titleFromFile(f.name);
+      const edited = f.lastModified
+        ? new Date(f.lastModified).toLocaleDateString(undefined, {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+          })
+        : "imported from this computer";
+      if (!byNotebook.has(nb)) byNotebook.set(nb, new Map());
+      const sections = byNotebook.get(nb);
+      if (!sections.has(sec)) sections.set(sec, []);
+      sections.get(sec).push(
+        paragraphsToPage(
+          `local-${slug(nb)}-${slug(sec)}-${slug(title)}-${sections.get(sec).length}`,
+          title,
+          paragraphs.length ? paragraphs : ["(No readable text found.)"],
+          edited
+        )
+      );
+    }
+    let idx = notebooks.length;
+    for (const [name, sections] of byNotebook.entries()) {
+      notebooks.push({
+        id: `local-nb-${slug(name)}`,
+        name,
+        color: NB_COLORS[idx % NB_COLORS.length],
+        synced: true,
+        sections: [...sections.entries()].map(([secName, pages]) => ({
+          id: `local-sec-${slug(name)}-${slug(secName)}`,
+          name: secName,
+          pages,
+        })),
+      });
+      idx++;
+    }
   }
 
   // 2) Raw .one files parsed in the browser, grouped by folder (if a folder was picked).
