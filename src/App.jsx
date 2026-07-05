@@ -1832,6 +1832,7 @@ function ReaderView({
             })()
           ) : (
             <div
+              className="imported-html"
               style={{ fontFamily, fontSize: settings.fontSize, lineHeight: settings.lineHeight, color: readerText }}
               dangerouslySetInnerHTML={{ __html: pageHtml }}
             />
@@ -2178,8 +2179,9 @@ function SyncModal({ step, configured, discovered = [], error, counts, onConnect
               </p>
               <p style={{ color: C.inkSoft, fontSize: 13, lineHeight: 1.55 }}>
                 Export your OneNote notes and drop the files here — no Microsoft sign-in needed.
-                In OneNote choose <b>File → Print → Save as PDF</b> (or export as PDF), then pick the
-                files below. Also accepts DOCX, HTML, Markdown and TXT.
+                For the fullest formatting — <b>bold, italics, bullet lists and images/GIFs</b> —
+                export as <b>Word (.docx)</b> or <b>HTML</b>. On a Mac, <b>File → Print → Save as PDF</b>
+                also works and keeps headings, bullets, images and layout. Markdown and TXT are fine too.
               </p>
               <button
                 onClick={() => fileRef.current && fileRef.current.click()}

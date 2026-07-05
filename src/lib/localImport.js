@@ -28,6 +28,27 @@ function titleFromFile(name) {
   return name.replace(/\.[^.]+$/, "").replace(/\s+/g, " ").trim() || "Untitled";
 }
 
+// Plain-text fallback (read-aloud, word counts) derived from imported HTML.
+function htmlToText(html) {
+  const paras = String(html || "")
+    .replace(/<\/(?:p|div|li|h[1-6]|blockquote|tr)>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .split(/\n+/)
+    .map((s) => s.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  return paras.length ? paras : ["(No readable text found.)"];
+}
+
+function escapeText(s) {
+  return String(s).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+}
+
 function baseSection(name) {
   return sectionNameFromFile(name);
 }
@@ -100,16 +121,17 @@ export async function importLocalFiles(fileList) {
     notebooks.push(...normalizeNotebooks(parsed));
   }
 
-  // 2) Exported documents (PDF / DOCX / HTML / MD / TXT) — clean text.
+  // 2) Exported documents (PDF / DOCX / HTML / MD / TXT) — rich HTML that
+  //    preserves bold, italics, lists and images.
   if (docFiles.length) {
-    const { parseDocFile } = await import("./importDocs");
+    const { parseDocFileHtml } = await import("./importDocs");
     const byNotebook = new Map();
     for (const f of docFiles) {
-      let paragraphs;
+      let html;
       try {
-        paragraphs = await parseDocFile(f);
+        html = await parseDocFileHtml(f);
       } catch (e) {
-        paragraphs = [`(Couldn't read ${f.name}: ${e.message})`];
+        html = `<p>(Couldn't read ${escapeText(f.name)}: ${escapeText(e.message)})</p>`;
       }
       const { nb, sec } = docGrouping(f);
       const title = titleFromFile(f.name);
@@ -123,14 +145,13 @@ export async function importLocalFiles(fileList) {
       if (!byNotebook.has(nb)) byNotebook.set(nb, new Map());
       const sections = byNotebook.get(nb);
       if (!sections.has(sec)) sections.set(sec, []);
-      sections.get(sec).push(
-        paragraphsToPage(
-          `local-${slug(nb)}-${slug(sec)}-${slug(title)}-${sections.get(sec).length}`,
-          title,
-          paragraphs.length ? paragraphs : ["(No readable text found.)"],
-          edited
-        )
-      );
+      sections.get(sec).push({
+        id: `local-${slug(nb)}-${slug(sec)}-${slug(title)}-${sections.get(sec).length}`,
+        title,
+        edited,
+        html,
+        content: htmlToText(html),
+      });
     }
     let idx = notebooks.length;
     for (const [name, sections] of byNotebook.entries()) {

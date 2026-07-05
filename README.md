@@ -48,18 +48,23 @@ npm run dev
 
 ## Import exported notes (recommended — no Azure)
 
-This gives the cleanest text and needs no Microsoft account.
+This gives the cleanest result and needs no Microsoft account. Formatting is
+preserved: **bold, italics, bullet/numbered lists, headings, tables and
+images/GIFs**.
 
-1. In OneNote, open a page/section and choose **File → Print → Save as PDF**
-   (OneNote for Mac), or **File → Export** (Windows). Repeat for the notes you
-   want. You can also use DOCX, HTML, Markdown or plain-text exports.
+1. In OneNote, export the notes you want. For the fullest fidelity choose
+   **Word (.docx)** or **HTML** (Windows: File → Export). On a **Mac**, use
+   **File → Print → Save as PDF** — this keeps headings, bullet lists, images
+   and layout (inline bold/italic isn't recoverable from PDF, so use DOCX/HTML
+   if you need those).
 2. In the app: **Sync OneNote → Choose exported files**, then select all the
    files at once.
 3. Each file becomes a page. Use **Edit** in the sidebar to rename pages,
    group them into sections/notebooks, and delete anything you don't want.
 
 Supported formats: **PDF, DOCX, HTML/HTM, Markdown (.md), and text (.txt)**.
-Parsing happens entirely in your browser.
+Parsing happens entirely in your browser; imported HTML is sanitized before it
+is stored or displayed.
 
 ## Direct local files (advanced)
 
