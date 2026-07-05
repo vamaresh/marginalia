@@ -655,11 +655,11 @@ Write a natural, engaging 8 to 12 line back-and-forth conversation between Maya 
 [{"speaker":"Maya","text":"..."},{"speaker":"Leo","text":"..."}]`;
 
     try {
-      const resp = await fetch("/api/claude", {
+      const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-6",
+          model: "gpt-4o-mini",
           max_tokens: 1000,
           messages: [{ role: "user", content: prompt }],
         }),
@@ -784,11 +784,11 @@ Return ONLY a JSON object, no markdown fences, no preamble, in exactly this shap
 Only include "related" entries whose id actually appears in the list above. Keep each string under 30 words. If a category has nothing genuine to include, return an empty array for it rather than inventing something.`;
 
     try {
-      const resp = await fetch("/api/claude", {
+      const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-6",
+          model: "gpt-4o-mini",
           max_tokens: 1000,
           messages: [{ role: "user", content: prompt }],
         }),

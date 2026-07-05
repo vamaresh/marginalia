@@ -18,9 +18,9 @@ npm run dev
    the Vite build (`npm run build`, output `dist`) — no config needed.
 3. Before your first deploy (or right after), go to
    **Project Settings → Environment Variables** and add:
-   - `ANTHROPIC_API_KEY` = your Anthropic API key (from console.anthropic.com)
+   - `OPENAI_API_KEY` = your OpenAI API key (from platform.openai.com/api-keys)
 
-   This key powers the `/api/claude` serverless function, which the app calls
+   This key powers the `/api/chat` serverless function, which the app calls
    for **Turn into podcast** and **Sermon insights**. It never reaches the
    browser — only your server-side function sees it.
 4. Deploy. Every push to your main branch will auto-redeploy.
@@ -33,7 +33,7 @@ npm run dev
   API. Voice quality depends on the device/browser; works best in Chrome or
   Edge on desktop.
 - **Turn into podcast / Sermon insights** — real Claude API calls via the
-  `/api/claude` serverless function. Needs `ANTHROPIC_API_KEY` set as above.
+  `/api/chat` serverless function. Needs `OPENAI_API_KEY` set as above.
 - **Sync OneNote** — currently **simulated** with sample data, so you can see
   the intended flow. A real "Sign in with Microsoft" requires:
   1. Registering an app in Microsoft Entra ID (Azure Portal — free)
